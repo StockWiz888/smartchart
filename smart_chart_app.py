@@ -16,28 +16,24 @@ if st.button("Generate Signals"):
         ticker = ticker.strip().upper()
         st.info(f"Fetching {ticker} data …")
 
-        # ---- Fetch data ----
+        # ---- Download price history ----
         stock = yf.Ticker(ticker)
         data = stock.history(period="5y", interval="1d")
-
         if data.empty:
             st.error(f"No data found for {ticker}.")
             st.stop()
 
-        # ---- Indicators ----
-        data["RSI"] = RSIIndicator(data["Close"], window=14).rsi().astype(float)
-        data["MA20"] = SMAIndicator(data["Close"], window=20).sma_indicator().astype(float)
-        data["MA50"] = SMAIndicator(data["Close"], window=50).sma_indicator().astype(float)
+        # ---- Indicators (force 1-D) ----
+        data["RSI"] = pd.Series(RSIIndicator(data["Close"], 14).rsi().values.flatten(), index=data.index)
+        data["MA20"] = pd.Series(SMAIndicator(data["Close"], 20).sma_indicator().values.flatten(), index=data.index)
+        data["MA50"] = pd.Series(SMAIndicator(data["Close"], 50).sma_indicator().values.flatten(), index=data.index)
+
         macd = MACD(data["Close"])
-        data["MACD"] = macd.macd().astype(float)
-        data["MACD_Signal"] = macd.macd_signal().astype(float)
+        data["MACD"] = pd.Series(macd.macd().values.flatten(), index=data.index)
+        data["MACD_Signal"] = pd.Series(macd.macd_signal().values.flatten(), index=data.index)
         data.dropna(inplace=True)
 
-        # ---- Flatten to 1-D ----
-        for col in ["RSI","MA20","MA50","MACD","MACD_Signal"]:
-            data[col] = np.array(data[col]).reshape(-1)
-
-        # ---- Signal logic ----
+        # ---- Buy / Sell logic ----
         data["Buy"] = np.where(
             (data["RSI"] < 30)
             & (data["MACD"] > data["MACD_Signal"])
@@ -51,34 +47,39 @@ if st.button("Generate Signals"):
             data["Close"], np.nan)
 
         # ---- Build signal table ----
-        signals=[]
+        signals = []
         for i in range(len(data)):
             if not np.isnan(data["Buy"].iloc[i]):
-                signals.append({"Date":data.index[i].strftime("%Y-%m-%d"),
-                                "Type":"BUY",
-                                "Price":round(data["Buy"].iloc[i],2),
-                                "Reason":"RSI<30, MACD bullish, MA20>MA50"})
+                signals.append({
+                    "Date": data.index[i].strftime("%Y-%m-%d"),
+                    "Type": "BUY",
+                    "Price": round(data["Buy"].iloc[i], 2),
+                    "Reason": "RSI<30, MACD bullish, MA20>MA50"
+                })
             elif not np.isnan(data["Sell"].iloc[i]):
-                signals.append({"Date":data.index[i].strftime("%Y-%m-%d"),
-                                "Type":"SELL",
-                                "Price":round(data["Sell"].iloc[i],2),
-                                "Reason":"RSI>70, MACD bearish, MA20<MA50"})
-        signal_df=pd.DataFrame(signals)
+                signals.append({
+                    "Date": data.index[i].strftime("%Y-%m-%d"),
+                    "Type": "SELL",
+                    "Price": round(data["Sell"].iloc[i], 2),
+                    "Reason": "RSI>70, MACD bearish, MA20<MA50"
+                })
+        signal_df = pd.DataFrame(signals)
 
-        # ---- Display latest signal ----
+        # ---- Latest signal ----
         if not signal_df.empty:
-            latest=signal_df.iloc[-1]
+            latest = signal_df.iloc[-1]
             st.metric(label=f"{latest['Type']} Signal",
                       value=f"${latest['Price']}",
-                      delta=latest["Reason"])
+                      delta=latest['Reason'])
 
+        # ---- Table ----
         st.subheader("💹 Signal History")
         st.dataframe(signal_df.tail(25), use_container_width=True)
 
         # ---- Chart ----
-        st.subheader("📈 Price Chart with Signals")
-        fig, ax = plt.subplots(figsize=(12,6))
-        ax.plot(data["Close"].values, color="blue", linewidth=1.1, label="Close")
+        st.subheader("📈 Price Chart with Buy / Sell Points")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(data.index, data["Close"].astype(float), color="blue", lw=1.1, label="Close")
         ax.scatter(data.index, data["Buy"], color="green", marker="^", s=100, label="BUY")
         ax.scatter(data.index, data["Sell"], color="red", marker="v", s=100, label="SELL")
         ax.legend()
@@ -87,13 +88,11 @@ if st.button("Generate Signals"):
         st.pyplot(fig)
 
         # ---- Summary ----
-        buys=len(signal_df[signal_df["Type"]=="BUY"])
-        sells=len(signal_df[signal_df["Type"]=="SELL"])
         st.subheader("📊 Signal Summary")
-        c1,c2,c3=st.columns(3)
-        c1.metric("Total Signals", len(signal_df))
-        c2.metric("Buy Signals", buys)
-        c3.metric("Sell Signals", sells)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Signals", len(signal_df))
+        col2.metric("Buy Signals", len(signal_df[signal_df["Type"] == "BUY"]))
+        col3.metric("Sell Signals", len(signal_df[signal_df["Type"] == "SELL"]))
         st.success("✅ Signal generation complete.")
 
     except Exception as e:
