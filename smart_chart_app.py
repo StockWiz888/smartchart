@@ -16,11 +16,16 @@ if st.button("Generate Signals"):
 
         # ---- Download price history ----
         data = yf.download(ticker, period="5y", interval="1d", progress=False)
+
         if data.empty:
             st.error(f"No data found for {ticker}.")
             st.stop()
 
-        # ---- Simple indicators (manual calc, always 1D) ----
+        # ---- Force all columns to 1D Series ----
+        for col in data.columns:
+            data[col] = pd.Series(np.array(data[col]).reshape(-1), index=data.index)
+
+        # ---- Manual indicator calculations (always 1D) ----
         delta = data["Close"].diff()
         gain = np.where(delta > 0, delta, 0)
         loss = np.where(delta < 0, -delta, 0)
@@ -39,7 +44,7 @@ if st.button("Generate Signals"):
 
         data.dropna(inplace=True)
 
-        # ---- Buy / Sell logic ----
+        # ---- Buy / Sell Logic ----
         data["Buy"] = np.where(
             (data["RSI"] < 30)
             & (data["MACD"] > data["MACD_Signal"])
@@ -52,7 +57,7 @@ if st.button("Generate Signals"):
             & (data["MA20"] < data["MA50"]),
             data["Close"], np.nan)
 
-        # ---- Build signal table ----
+        # ---- Build Signal Table ----
         signals = []
         for i in range(len(data)):
             if not np.isnan(data["Buy"].iloc[i]):
@@ -69,7 +74,6 @@ if st.button("Generate Signals"):
                     "Price": round(data["Sell"].iloc[i], 2),
                     "Reason": "RSI>70, MACD bearish, MA20<MA50"
                 })
-
         signal_df = pd.DataFrame(signals)
 
         # ---- Display ----
@@ -95,10 +99,10 @@ if st.button("Generate Signals"):
 
         # ---- Summary ----
         st.subheader("📊 Signal Summary")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Signals", len(signal_df))
-        col2.metric("Buy Signals", len(signal_df[signal_df["Type"] == "BUY"]))
-        col3.metric("Sell Signals", len(signal_df[signal_df["Type"] == "SELL"]))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Signals", len(signal_df))
+        c2.metric("Buy Signals", len(signal_df[signal_df["Type"] == "BUY"]))
+        c3.metric("Sell Signals", len(signal_df[signal_df["Type"] == "SELL"]))
         st.success("✅ Signal generation complete.")
 
     except Exception as e:
