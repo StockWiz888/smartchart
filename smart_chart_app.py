@@ -2,8 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from ta.momentum import RSIIndicator
-from ta.trend import SMAIndicator, MACD
 import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Smart Chart", page_icon="📊", layout="wide")
@@ -17,20 +15,28 @@ if st.button("Generate Signals"):
         st.info(f"Fetching {ticker} data …")
 
         # ---- Download price history ----
-        stock = yf.Ticker(ticker)
-        data = stock.history(period="5y", interval="1d")
+        data = yf.download(ticker, period="5y", interval="1d", progress=False)
         if data.empty:
             st.error(f"No data found for {ticker}.")
             st.stop()
 
-        # ---- Indicators (force 1-D) ----
-        data["RSI"] = pd.Series(RSIIndicator(data["Close"], 14).rsi().values.flatten(), index=data.index)
-        data["MA20"] = pd.Series(SMAIndicator(data["Close"], 20).sma_indicator().values.flatten(), index=data.index)
-        data["MA50"] = pd.Series(SMAIndicator(data["Close"], 50).sma_indicator().values.flatten(), index=data.index)
+        # ---- Simple indicators (manual calc, always 1D) ----
+        delta = data["Close"].diff()
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        roll_up = pd.Series(gain).rolling(14).mean()
+        roll_down = pd.Series(loss).rolling(14).mean()
+        rs = roll_up / roll_down
+        data["RSI"] = 100 - (100 / (1 + rs))
 
-        macd = MACD(data["Close"])
-        data["MACD"] = pd.Series(macd.macd().values.flatten(), index=data.index)
-        data["MACD_Signal"] = pd.Series(macd.macd_signal().values.flatten(), index=data.index)
+        data["MA20"] = data["Close"].rolling(window=20).mean()
+        data["MA50"] = data["Close"].rolling(window=50).mean()
+
+        exp1 = data["Close"].ewm(span=12, adjust=False).mean()
+        exp2 = data["Close"].ewm(span=26, adjust=False).mean()
+        data["MACD"] = exp1 - exp2
+        data["MACD_Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
+
         data.dropna(inplace=True)
 
         # ---- Buy / Sell logic ----
@@ -63,23 +69,23 @@ if st.button("Generate Signals"):
                     "Price": round(data["Sell"].iloc[i], 2),
                     "Reason": "RSI>70, MACD bearish, MA20<MA50"
                 })
+
         signal_df = pd.DataFrame(signals)
 
-        # ---- Latest signal ----
+        # ---- Display ----
         if not signal_df.empty:
             latest = signal_df.iloc[-1]
             st.metric(label=f"{latest['Type']} Signal",
                       value=f"${latest['Price']}",
                       delta=latest['Reason'])
 
-        # ---- Table ----
         st.subheader("💹 Signal History")
         st.dataframe(signal_df.tail(25), use_container_width=True)
 
         # ---- Chart ----
         st.subheader("📈 Price Chart with Buy / Sell Points")
         fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(data.index, data["Close"].astype(float), color="blue", lw=1.1, label="Close")
+        ax.plot(data.index, data["Close"], color="blue", lw=1.2, label="Close")
         ax.scatter(data.index, data["Buy"], color="green", marker="^", s=100, label="BUY")
         ax.scatter(data.index, data["Sell"], color="red", marker="v", s=100, label="SELL")
         ax.legend()
