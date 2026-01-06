@@ -6,119 +6,95 @@ from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator, MACD
 import matplotlib.pyplot as plt
 
-# ---------- Streamlit layout ----------
 st.set_page_config(page_title="Smart Chart", page_icon="📊", layout="wide")
-st.title("📊 Smart Chart — Automatic Buy & Sell Signal Generator")
+st.title("📊 Smart Chart — Buy / Sell Signal Assistant")
 
 ticker = st.text_input("Enter Stock Symbol (e.g. AAPL, TSLA, MSFT)", "AAPL")
 
-# ---------- When user clicks button ----------
 if st.button("Generate Signals"):
-
     try:
         ticker = ticker.strip().upper()
-        st.info(f"Fetching data for {ticker} ...")
+        st.info(f"Fetching {ticker} data …")
 
-        # ---------- Download market data ----------
+        # ---- Fetch data ----
         stock = yf.Ticker(ticker)
         data = stock.history(period="5y", interval="1d")
 
         if data.empty:
-            st.error(f"❌ No data found for {ticker}.  Try another symbol.")
+            st.error(f"No data found for {ticker}.")
             st.stop()
 
-        # ---------- Indicators ----------
-        data["RSI"] = RSIIndicator(data["Close"], window=14).rsi()
-        data["MA20"] = SMAIndicator(data["Close"], window=20).sma_indicator()
-        data["MA50"] = SMAIndicator(data["Close"], window=50).sma_indicator()
+        # ---- Indicators ----
+        data["RSI"] = RSIIndicator(data["Close"], window=14).rsi().astype(float)
+        data["MA20"] = SMAIndicator(data["Close"], window=20).sma_indicator().astype(float)
+        data["MA50"] = SMAIndicator(data["Close"], window=50).sma_indicator().astype(float)
         macd = MACD(data["Close"])
-        data["MACD"] = macd.macd()
-        data["MACD_Signal"] = macd.macd_signal()
+        data["MACD"] = macd.macd().astype(float)
+        data["MACD_Signal"] = macd.macd_signal().astype(float)
         data.dropna(inplace=True)
 
-        # ---------- Buy / Sell Logic ----------
-        data["Buy_Price"] = np.where(
+        # ---- Flatten to 1-D ----
+        for col in ["RSI","MA20","MA50","MACD","MACD_Signal"]:
+            data[col] = np.array(data[col]).reshape(-1)
+
+        # ---- Signal logic ----
+        data["Buy"] = np.where(
             (data["RSI"] < 30)
             & (data["MACD"] > data["MACD_Signal"])
             & (data["MA20"] > data["MA50"]),
-            data["Close"],
-            np.nan,
-        )
+            data["Close"], np.nan)
 
-        data["Sell_Price"] = np.where(
+        data["Sell"] = np.where(
             (data["RSI"] > 70)
             & (data["MACD"] < data["MACD_Signal"])
             & (data["MA20"] < data["MA50"]),
-            data["Close"],
-            np.nan,
-        )
+            data["Close"], np.nan)
 
-        # ---------- Create Signal Table ----------
-        signals = []
+        # ---- Build signal table ----
+        signals=[]
         for i in range(len(data)):
-            if not np.isnan(data["Buy_Price"].iloc[i]):
-                signals.append(
-                    {
-                        "Date": data.index[i].strftime("%Y-%m-%d"),
-                        "Type": "BUY",
-                        "Price": round(data["Buy_Price"].iloc[i], 2),
-                        "Reason": "RSI<30, MACD bullish, MA20>MA50",
-                    }
-                )
-            elif not np.isnan(data["Sell_Price"].iloc[i]):
-                signals.append(
-                    {
-                        "Date": data.index[i].strftime("%Y-%m-%d"),
-                        "Type": "SELL",
-                        "Price": round(data["Sell_Price"].iloc[i], 2),
-                        "Reason": "RSI>70, MACD bearish, MA20<MA50",
-                    }
-                )
+            if not np.isnan(data["Buy"].iloc[i]):
+                signals.append({"Date":data.index[i].strftime("%Y-%m-%d"),
+                                "Type":"BUY",
+                                "Price":round(data["Buy"].iloc[i],2),
+                                "Reason":"RSI<30, MACD bullish, MA20>MA50"})
+            elif not np.isnan(data["Sell"].iloc[i]):
+                signals.append({"Date":data.index[i].strftime("%Y-%m-%d"),
+                                "Type":"SELL",
+                                "Price":round(data["Sell"].iloc[i],2),
+                                "Reason":"RSI>70, MACD bearish, MA20<MA50"})
+        signal_df=pd.DataFrame(signals)
 
-        signal_df = pd.DataFrame(signals)
-
-        # ---------- Show Latest Signal ----------
+        # ---- Display latest signal ----
         if not signal_df.empty:
-            latest = signal_df.iloc[-1]
-            st.metric(
-                label=f"Most Recent Signal: {latest['Type']}",
-                value=f"${latest['Price']}",
-                delta=latest["Reason"],
-            )
+            latest=signal_df.iloc[-1]
+            st.metric(label=f"{latest['Type']} Signal",
+                      value=f"${latest['Price']}",
+                      delta=latest["Reason"])
 
-        # ---------- Display Table ----------
-        st.subheader("💹  Signal History")
-        if not signal_df.empty:
-            st.dataframe(signal_df.tail(25), use_container_width=True)
-        else:
-            st.write("No signals yet in the selected period.")
+        st.subheader("💹 Signal History")
+        st.dataframe(signal_df.tail(25), use_container_width=True)
 
-        # ---------- Plot Chart ----------
-        st.subheader("📈  Price Chart with Entry / Exit Points")
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(data["Close"], color="blue", linewidth=1.1, label="Close")
-        ax.scatter(
-            data.index, data["Buy_Price"], color="green", marker="^", s=100, label="BUY"
-        )
-        ax.scatter(
-            data.index, data["Sell_Price"], color="red", marker="v", s=100, label="SELL"
-        )
+        # ---- Chart ----
+        st.subheader("📈 Price Chart with Signals")
+        fig, ax = plt.subplots(figsize=(12,6))
+        ax.plot(data["Close"].values, color="blue", linewidth=1.1, label="Close")
+        ax.scatter(data.index, data["Buy"], color="green", marker="^", s=100, label="BUY")
+        ax.scatter(data.index, data["Sell"], color="red", marker="v", s=100, label="SELL")
         ax.legend()
-        ax.set_title(f"{ticker} — Buy/Sell Price Points")
+        ax.set_title(f"{ticker} — Buy / Sell Price Points")
         ax.set_ylabel("Price ($)")
         st.pyplot(fig)
 
-        # ---------- Performance Summary ----------
-        buys = signal_df[signal_df["Type"] == "BUY"]
-        sells = signal_df[signal_df["Type"] == "SELL"]
-        total = len(signal_df)
-        st.subheader("📊  Signal Summary")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Signals", total)
-        col2.metric("Buy Signals", len(buys))
-        col3.metric("Sell Signals", len(sells))
-
-        st.success("✅  Signal generation complete.")
+        # ---- Summary ----
+        buys=len(signal_df[signal_df["Type"]=="BUY"])
+        sells=len(signal_df[signal_df["Type"]=="SELL"])
+        st.subheader("📊 Signal Summary")
+        c1,c2,c3=st.columns(3)
+        c1.metric("Total Signals", len(signal_df))
+        c2.metric("Buy Signals", buys)
+        c3.metric("Sell Signals", sells)
+        st.success("✅ Signal generation complete.")
 
     except Exception as e:
-        st.error(f"⚠️  Error: {e}")
+        st.error(f"⚠️ Error: {e}")
